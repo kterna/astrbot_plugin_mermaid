@@ -4,8 +4,10 @@ from astrbot.core.star.register import register_llm_tool as llm_tool
 import mermaid as md
 from mermaid.graph import Graph
 import os
-import tempfile
 import astrbot.api.message_components as Comp
+import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 
 @register("mermaid", "kterna", "使用Mermaid语法生成各种图表（思维导图、流程图、时序图等）", "1.0.0", "https://github.com/kterna/astrbot_plugin_mermaid")
 class MermaidPlugin(Star):
@@ -16,6 +18,8 @@ class MermaidPlugin(Star):
         self.temp_dir = os.path.join(plugin_dir, "temp")
         # 确保temp目录存在
         os.makedirs(self.temp_dir, exist_ok=True)
+        # 创建线程池
+        self.executor = ThreadPoolExecutor(max_workers=3)
     
     @filter.command("mermaid")
     async def mermaid_command(self, event: AstrMessageEvent):
@@ -65,8 +69,11 @@ class MermaidPlugin(Star):
             # 生成唯一文件名
             img_path = os.path.join(self.temp_dir, f"mermaid_{hash(mermaid_code)}.png")
             
-            # 导出为PNG
-            render.to_png(img_path)
+            # 在线程池中异步执行to_png操作，避免堵塞主线程
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor, 
+                functools.partial(render.to_png, img_path)
+            )
             
             # 检查文件是否成功生成
             if not os.path.exists(img_path):
@@ -82,12 +89,3 @@ class MermaidPlugin(Star):
             
         except Exception as e:
             return event.plain_result(f"❌ 生成图表时发生错误: {str(e)}\n请检查Mermaid语法是否正确，或尝试简化图表内容。")
-    
-    async def terminate(self):
-        '''插件卸载时清理临时文件'''
-        try:
-            import shutil
-            if os.path.exists(self.temp_dir):
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
-        except Exception as e:
-            pass
