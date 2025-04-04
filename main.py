@@ -8,6 +8,7 @@ import astrbot.api.message_components as Comp
 import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
+import uuid  # 添加uuid模块用于生成唯一文件名
 
 @register("mermaid", "kterna", "使用Mermaid语法生成各种图表（思维导图、流程图、时序图等）", "1.0.0", "https://github.com/kterna/astrbot_plugin_mermaid")
 class MermaidPlugin(Star):
@@ -143,46 +144,110 @@ class MermaidPlugin(Star):
         
     async def mermaid2image(self, mermaid_code: str) -> list:
         '''将Mermaid语法转换为图像。'''
+        max_retries = 3
+        retry_count = 0
+        base_delay = 1  # 基础延迟1秒
+        
+        # 生成唯一文件名使用UUID而不是hash
+        img_id = uuid.uuid4().hex
+        img_path = os.path.join(self.temp_dir, f"mermaid_{img_id}.png")
+        
+        while retry_count <= max_retries:
+            try:                
+                # 创建图表并渲染
+                graph = Graph("Mermaid图表", mermaid_code)
+                render = md.Mermaid(graph)
+                
+                # 异步执行图表生成
+                await asyncio.get_event_loop().run_in_executor(
+                    self.executor, 
+                    functools.partial(render.to_png, img_path)
+                )
+                
+                # 检查文件是否成功生成
+                if not os.path.exists(img_path):
+                    raise Exception("图像文件生成失败")
+                
+                # 验证生成的文件是否为有效的PNG图像
+                file_size = os.path.getsize(img_path)
+                if file_size < 1024:  # 小于1KB，可能是错误文件
+                    # 读取文件内容
+                    with open(img_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read().lower()
+                    
+                    # 检查错误类型
+                    import re
+                    # 如果是网络错误且还有重试次数，则重试
+                    if re.search(r'unknown|network|fail|server', content) and retry_count < max_retries:
+                        retry_count += 1
+                        # 指数退避延迟
+                        delay = base_delay * (2 ** (retry_count - 1))
+                        await asyncio.sleep(delay)
+                        continue
+                    
+                    # 清理错误文件
+                    self._clean_file(img_path)
+                    
+                    error_message = "生成图表失败"
+                    if re.search(r'unknown|network|fail|server', content):
+                        error_message = f"❌ 生成图表失败：出现网络或服务器错误 (已重试{retry_count}次)"
+                    elif re.search(r'parse|syntax|invalid|expect', content):
+                        error_message = "❌ 生成图表失败：Mermaid语法错误，请检查图表代码"
+                    else:
+                        error_message = f"❌ 生成图表失败：{content[:100]}..."
+                    
+                    return [Comp.Plain(text=error_message)]
+                
+                # 获取响应结果
+                response = [
+                    Comp.Plain(text="✅ 图表生成成功:\n"),
+                    Comp.Image(file=img_path)
+                ]
+                
+                # 标记此文件为待清理状态
+                self._schedule_file_cleanup(img_path)
+                
+                return response
+                
+            except Exception as e:
+                # 确保清理可能部分生成的文件
+                if os.path.exists(img_path):
+                    self._clean_file(img_path)
+                    
+                error_msg = str(e).lower()
+                # 检查是否是网络连接相关错误
+                if (any(network_err in error_msg for network_err in ["connection", "timeout", "network", "server"]) 
+                    and retry_count < max_retries):
+                    retry_count += 1
+                    delay = base_delay * (2 ** (retry_count - 1))
+                    await asyncio.sleep(delay)
+                    continue
+                
+                return [Comp.Plain(text=f"❌ 生成图表时发生错误: {str(e)}\n请检查Mermaid语法是否正确，或尝试简化图表内容。")]
+        
+        # 如果重试全部失败
+        return [Comp.Plain(text=f"❌ 生成图表失败：服务器连接问题，已尝试重试{max_retries}次")]
+    
+    def _clean_file(self, file_path):
+        """立即清理文件的辅助方法"""
         try:
-            # 生成唯一文件名
-            img_path = os.path.join(self.temp_dir, f"mermaid_{hash(mermaid_code)}.png")
-            
-            # 创建图表并渲染
-            graph = Graph("Mermaid图表", mermaid_code)
-            render = md.Mermaid(graph)
-            
-            # 异步执行图表生成
-            await asyncio.get_event_loop().run_in_executor(
-                self.executor, 
-                functools.partial(render.to_png, img_path)
-            )
-            
-            # 检查文件是否成功生成
-            if not os.path.exists(img_path):
-                raise Exception("图像文件生成失败")
-            
-            # 验证生成的文件是否为有效的PNG图像
-            file_size = os.path.getsize(img_path)
-            if file_size < 1024:  # 小于1KB，可能是错误文件
-                # 读取文件内容
-                with open(img_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read().lower()
-                
-                # 检查错误类型
-                import re
-                error_message = "生成图表失败"
-                if re.search(r'unknown|network|fail|server', content):
-                    error_message = "❌ 生成图表失败：出现网络或服务器错误，请稍后重试"
-                elif re.search(r'parse|syntax|invalid|expect', content):
-                    error_message = "❌ 生成图表失败：Mermaid语法错误，请检查图表代码"
-                else:
-                    error_message = f"❌ 生成图表失败：{content[:100]}..."
-                
-                return [Comp.Plain(text=error_message)]
-            
-            return [
-                Comp.Plain(text="✅ 图表生成成功:\n"),
-                Comp.Image(file=img_path)
-            ]
+            if os.path.exists(file_path):
+                os.remove(file_path)
         except Exception as e:
-            return [Comp.Plain(text=f"❌ 生成图表时发生错误: {str(e)}\n请检查Mermaid语法是否正确，或尝试简化图表内容。")]
+            # 记录错误但不抛出异常
+            print(f"清理文件 {file_path} 失败: {str(e)}")
+    
+    def _schedule_file_cleanup(self, file_path, delay_seconds=300):
+        """安排延迟清理文件"""
+        async def delayed_cleanup():
+            try:
+                # 等待指定时间以确保文件已被使用
+                await asyncio.sleep(delay_seconds)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"已清理临时文件: {os.path.basename(file_path)}")
+            except Exception as e:
+                print(f"延迟清理文件 {file_path} 失败: {str(e)}")
+                
+        # 创建异步任务来执行延迟清理
+        asyncio.create_task(delayed_cleanup())
