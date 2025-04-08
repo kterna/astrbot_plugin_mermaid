@@ -1,18 +1,22 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.register import register_llm_tool as llm_tool
-import mermaid as md
-from mermaid.graph import Graph
-import os
+from astrbot.core import AstrBotConfig
 import astrbot.api.message_components as Comp
+
 import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
-import uuid  # 添加uuid模块用于生成唯一文件名
+import uuid
+import os
 
-@register("mermaid", "kterna", "使用Mermaid语法生成各种图表（思维导图、流程图、时序图等）", "1.0.0", "https://github.com/kterna/astrbot_plugin_mermaid")
+import mermaid as md
+from mermaid.graph import Graph
+
+@register("mermaid", "kterna", "使用Mermaid语法生成各种图表（思维导图、流程图、时序图等）", "1.3.0", "https://github.com/kterna/astrbot_plugin_mermaid")
 class MermaidPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
+        os.environ['MERMAID_INK_SERVER'] = config.get("MERMAID_INK_SERVER")
         super().__init__(context)
         # 在插件目录下创建temp文件夹
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
