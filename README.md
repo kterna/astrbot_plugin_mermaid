@@ -2,6 +2,8 @@
 
 这是一个用于AstrBot的图表生成插件，它使用mermaid-py库将文本描述转换为精美的图表。
 
+[![moe_counter](https://count.getloli.com/get/@astrbot_plugin_mermaid?theme=moebooru)](https://github.com/kterna/astrbot_plugin_mermaid)
+
 ## 功能
 
 - 通过大语言模型将文本描述转换为Mermaid语法
